@@ -35,7 +35,8 @@ parser.add_argument("--sample_interval", type=int, default=400, help="interval b
 opt = parser.parse_args()
 print(opt)
 
-img_shape = (opt.channels, opt.img_size, opt.img_size)
+# img_shape = (opt.channels, opt.img_size, opt.img_size)
+img_shape = (3, 64, 64)
 
 cuda = True if torch.cuda.is_available() else False
 
@@ -101,8 +102,8 @@ class Generator(nn.Module):
     def __init__(self):
         super(Generator, self).__init__()
 
-        def block(in_feat, out_feat, normalize=True):
-            layers = [nn.Linear(in_feat, out_feat)]
+        def block(in_feat, out_feat, normalize=True, bias=True):
+            layers = [nn.Linear(in_feat, out_feat, bias=bias)]
             if normalize:
                 layers.append(nn.BatchNorm1d(out_feat, 0.8))
             layers.append(nn.LeakyReLU(0.2, inplace=True))
@@ -113,7 +114,7 @@ class Generator(nn.Module):
             *block(128, 256),
             *block(256, 512),
             *block(512, 1024),
-            nn.Linear(1024, int(np.prod(img_shape))),
+            nn.Linear(1024, 3*64*64),
             nn.Tanh()
         )
 
@@ -128,7 +129,7 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
 
         self.model = nn.Sequential(
-            nn.Linear(int(np.prod(img_shape)), 512),
+            nn.Linear(3*64*64, 512),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(512, 256),
             nn.LeakyReLU(0.2, inplace=True),
@@ -170,6 +171,21 @@ dataloader = torch.utils.data.DataLoader(
     shuffle=True,
 )
 
+dataloader_cifar = torch.utils.data.DataLoader(
+    datasets.CIFAR10(
+        "../../data/cifar10",
+        train=True,
+        download=True,
+        transform=transforms.Compose([
+                    transforms.Resize(64),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ]),
+    ),
+    batch_size=opt.batch_size,
+    shuffle=True,
+)
+
 # Optimizers
 optimizer_G = torch.optim.Adam(generator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
 optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
@@ -181,7 +197,7 @@ Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 # ----------
 gn = 0
 for epoch in range(opt.n_epochs):
-    for i, (imgs, _) in enumerate(dataloader):
+    for i, (imgs, _) in enumerate(dataloader_cifar):
 
         # Adversarial ground truths
         valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False)
@@ -215,7 +231,8 @@ for epoch in range(opt.n_epochs):
         optimizer_D.zero_grad()
 
         # Measure discriminator's ability to classify real from generated samples
-        real_loss = adversarial_loss(discriminator(real_imgs), valid)
+        cache = discriminator(real_imgs)
+        real_loss = adversarial_loss(cache, valid)
         fake_loss = adversarial_loss(discriminator(gen_imgs.detach()), fake)
         d_loss = (real_loss + fake_loss) / 2
 
@@ -227,9 +244,11 @@ for epoch in range(opt.n_epochs):
 
         print(
             "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
-            % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item())
+            % (epoch, opt.n_epochs, i, len(dataloader_cifar), d_loss.item(), g_loss.item())
         )
 
         save_image(gen_imgs.data[:25], "images_batch256/%d.png" % epoch, nrow=5, normalize=True)
+        '''
         print ("Calculating Inception Score ...")
         score = inception_score(cuda=True, batch_size=32, resize=True, splits=10)
+        '''
