@@ -19,24 +19,17 @@ from scipy.stats import entropy
 
 writer = tensorboardX.SummaryWriter(log_dir='./logs')
 
-os.makedirs("images_batch256_exp2", exist_ok=True)
-
 parser = argparse.ArgumentParser()
-parser.add_argument("--n_epochs", type=int, default=50, help="number of epochs of training")
-parser.add_argument("--batch_size", type=int, default=256, help="size of the batches")
+parser.add_argument("--n_epochs", type=int, default=200, help="number of epochs of training")
+parser.add_argument("--batch_size", type=int, default=64, help="size of the batches")
 parser.add_argument("--lr", type=float, default=0.0002, help="adam: learning rate")
 parser.add_argument("--b1", type=float, default=0.5, help="adam: decay of first order momentum of gradient")
 parser.add_argument("--b2", type=float, default=0.999, help="adam: decay of first order momentum of gradient")
 parser.add_argument("--n_cpu", type=int, default=8, help="number of cpu threads to use during batch generation")
 parser.add_argument("--latent_dim", type=int, default=100, help="dimensionality of the latent space")
-parser.add_argument("--img_size", type=int, default=64, help="size of each image dimension")
-parser.add_argument("--channels", type=int, default=3, help="number of image channels")
 parser.add_argument("--sample_interval", type=int, default=400, help="interval betwen image samples")
 opt = parser.parse_args()
 print(opt)
-
-# img_shape = (opt.channels, opt.img_size, opt.img_size)
-img_shape = (3, 64, 64)
 
 cuda = True if torch.cuda.is_available() else False
 
@@ -100,64 +93,7 @@ def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
 
 
 class Generator(nn.Module):
-    def __init__(self):
-        super(Generator, self).__init__()
-
-        self.init_size = opt.img_size // 4
-        self.l1 = nn.Sequential(nn.Linear(opt.latent_dim, 128 * self.init_size ** 2))
-
-        self.conv_blocks = nn.Sequential(
-            nn.BatchNorm2d(128),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 128, 3, stride=1, padding=1),
-            nn.BatchNorm2d(128, 0.8),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 64, 3, stride=1, padding=1),
-            nn.BatchNorm2d(64, 0.8),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, opt.channels, 3, stride=1, padding=1),
-            nn.Tanh(),
-        )
-
-    def forward(self, z):
-        out = self.l1(z)
-        out = out.view(out.shape[0], 128, self.init_size, self.init_size)
-        img = self.conv_blocks(out)
-        return img
-
-
-class Discriminator(nn.Module):
-    def __init__(self):
-        super(Discriminator, self).__init__()
-
-        def discriminator_block(in_filters, out_filters, bn=True):
-            block = [nn.Conv2d(in_filters, out_filters, 3, 2, 1), nn.LeakyReLU(0.2, inplace=True), nn.Dropout2d(0.25)]
-            if bn:
-                block.append(nn.BatchNorm2d(out_filters, 0.8))
-            return block
-
-        self.model = nn.Sequential(
-            *discriminator_block(opt.channels, 16, bn=False),
-            *discriminator_block(16, 32),
-            *discriminator_block(32, 64),
-            *discriminator_block(64, 128),
-        )
-
-        # The height and width of downsampled image
-        ds_size = opt.img_size // 2 ** 4
-        self.adv_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, 1), nn.Sigmoid())
-
-    def forward(self, img):
-        out = self.model(img)
-        out = out.view(out.shape[0], -1)
-        validity = self.adv_layer(out)
-
-        return validity
-
-'''
-class Generator(nn.Module):
-    def __init__(self):
+    def __init__(self, model_arch='vanilla_gan', model_type='cifar10'):
         super(Generator, self).__init__()
 
         def block(in_feat, out_feat, normalize=True, bias=True):
@@ -167,52 +103,185 @@ class Generator(nn.Module):
             layers.append(nn.LeakyReLU(0.2, inplace=True))
             return layers
 
-        self.model = nn.Sequential(
-            *block(opt.latent_dim, 128, normalize=False),
-            *block(128, 256),
-            *block(256, 512),
-            *block(512, 1024),
-            *block(1024, 2048),
-            *block(2048, 2048),
-            *block(2048, 1024),
-            nn.Linear(1024, 3*64*64),
-            nn.Tanh()
-        )
+        self.model_type = model_type
+        self.model_arch = model_arch
+        self.image_shape = {'mnist': (1, 32, 32),
+                            'cifar10': (3, 64, 64)}
+
+        if self.model_type == 'mnist':
+            channels = 1
+            img_size = 32
+        elif self.model_type == 'cifar10':
+            channels = 3
+            img_size = 64
+        else:
+            print("Error: Not defined")
+            return
+
+        self.init_size = img_size // 4
+
+        if self.model_arch == 'dc_gan':
+            self.l1 = nn.Sequential(nn.Linear(opt.latent_dim, 128 * self.init_size ** 2))
+
+        self.models_cifar10 = nn.ModuleDict({
+
+            'vanilla_gan':  nn.Sequential(
+                            *block(opt.latent_dim, 128, normalize=False),
+                            *block(128, 256),
+                            *block(256, 512),
+                            *block(512, 1024),
+                            *block(1024, 2048),
+                            *block(2048, 2048),
+                            *block(2048, 1024),
+                            nn.Linear(1024, 3 * 64 * 64),
+                            nn.Tanh()),
+
+            'dc_gan':       nn.Sequential(
+                            nn.BatchNorm2d(128),
+                            nn.Upsample(scale_factor=2),
+                            nn.Conv2d(128, 128, 3, stride=1, padding=1),
+                            nn.BatchNorm2d(128, 0.8),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Upsample(scale_factor=2),
+                            nn.Conv2d(128, 64, 3, stride=1, padding=1),
+                            nn.BatchNorm2d(64, 0.8),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Conv2d(64, channels, 3, stride=1, padding=1),
+                            nn.Tanh()),
+        })
+
+        self.models_mnist = nn.ModuleDict({
+
+            'vanilla_gan':  nn.Sequential(
+                            *block(opt.latent_dim, 128, normalize=False),
+                            *block(128, 256),
+                            *block(256, 512),
+                            *block(512, 1024),
+                            nn.Linear(1024, channels * img_size * img_size),
+                            nn.Tanh()),
+
+            'dc_gan':       nn.Sequential(
+                            nn.BatchNorm2d(128),
+                            nn.Upsample(scale_factor=2),
+                            nn.Conv2d(128, 128, 3, stride=1, padding=1),
+                            nn.BatchNorm2d(128, 0.8),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Upsample(scale_factor=2),
+                            nn.Conv2d(128, 64, 3, stride=1, padding=1),
+                            nn.BatchNorm2d(64, 0.8),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Conv2d(64, channels, 3, stride=1, padding=1),
+                            nn.Tanh())
+
+        })
+
+        self.model = {'mnist': self.models_mnist,
+                      'cifar10': self.models_cifar10}
 
     def forward(self, z):
-        img = self.model(z)
-        img = img.view(img.size(0), *img_shape)
+        if self.model_arch == 'dc_gan':
+            compress = self.l1(z)
+            compress = compress.view(compress.shape[0], 128, self.init_size, self.init_size)
+            z = compress
+
+        out = self.model[self.model_type][self.model_arch](z)
+        img = out.view(out.size(0), *self.image_shape[self.model_type])
         return img
 
 
 class Discriminator(nn.Module):
-    def __init__(self):
+    def __init__(self, model_arch='dc_gan', model_type='cifar10'):
         super(Discriminator, self).__init__()
 
-        self.model = nn.Sequential(
-            nn.Linear(3*64*64, 512),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(512, 256),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(256, 256),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(256, 1),
-            nn.Sigmoid(),
-        )
+        def discriminator_block(in_filters, out_filters, bn=True):
+            block = [nn.Conv2d(in_filters, out_filters, 3, 2, 1), nn.LeakyReLU(0.2, inplace=True), nn.Dropout2d(0.25)]
+            if bn:
+                block.append(nn.BatchNorm2d(out_filters, 0.8))
+            return block
+
+        self.model_type = model_type
+        self.model_arch = model_arch
+        self.image_shape = {'mnist': (1, 32, 32),
+                            'cifar10': (3, 64, 64)}
+
+        if self.model_type == 'mnist':
+            channels = 1
+            img_size = 32
+        elif self.model_type == 'cifar10':
+            channels = 3
+            img_size = 64
+        else:
+            print("Channel size is not defined")
+            return
+
+        self.init_size = img_size // 4
+
+        if self.model_arch == 'dc_gan':
+            ds_size = img_size // 2 ** 4
+            self.adv_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, 1), nn.Sigmoid())
+
+        self.models_cifar10 = nn.ModuleDict({
+
+            'vanilla_gan':  nn.Sequential(
+                            nn.Linear(3 * 64 * 64, 512),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Linear(512, 256),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Linear(256, 256),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Linear(256, 1),
+                            nn.Sigmoid()),
+
+            'dc_gan':   nn.Sequential(
+                        *discriminator_block(channels, 16, bn=False),
+                        *discriminator_block(16, 32),
+                        *discriminator_block(32, 64),
+                        *discriminator_block(64, 128)),
+
+        })
+
+        self.models_mnist = nn.ModuleDict({
+
+            'vanilla_gan':  nn.Sequential(
+                            nn.Linear(channels * img_size * img_size, 512),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Linear(512, 256),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Linear(256, 1),
+                            nn.Sigmoid()),
+
+            'dc_gan':       nn.Sequential(
+                            *discriminator_block(channels, 16, bn=False),
+                            *discriminator_block(16, 32),
+                            *discriminator_block(32, 64),
+                            *discriminator_block(64, 128))
+        })
+
+        self.model = {'mnist': self.models_mnist,
+                      'cifar10': self.models_cifar10}
 
     def forward(self, img):
-        img_flat = img.view(img.size(0), -1)
-        validity = self.model(img_flat)
+        if self.model_arch == 'dc_gan':
+            out = self.model[self.model_type][self.model_arch](img)
+            out = out.view(out.shape[0], -1)
+            validity = self.adv_layer(out)
+        elif self.model_arch == 'vanilla_gan':
+            out = img.view(img.shape[0], -1)
+            validity = self.model[self.model_type][self.model_arch](out)
 
         return validity
-'''
+
 
 # Loss function
 adversarial_loss = torch.nn.BCELoss()
 
 # Initialize generator and discriminator
-generator = Generator()
-discriminator = Discriminator()
+model_arch = 'dc_gan'
+model_type = 'cifar10'
+generator = Generator(model_arch=model_arch, model_type=model_type)
+discriminator = Discriminator(model_arch=model_arch, model_type=model_type)
+
+os.makedirs("{}_{}".format(model_arch, model_type), exist_ok=True)
 
 if cuda:
     generator.cuda()
@@ -221,13 +290,13 @@ if cuda:
 
 # Configure data loader
 os.makedirs("../../data/mnist", exist_ok=True)
-dataloader = torch.utils.data.DataLoader(
+dataloader_mnist = torch.utils.data.DataLoader(
     datasets.MNIST(
         "../../data/mnist",
         train=True,
         download=True,
         transform=transforms.Compose(
-            [transforms.Resize(opt.img_size), transforms.ToTensor(), transforms.Normalize([0.5], [0.5])]
+            [transforms.Resize(32), transforms.ToTensor(), transforms.Normalize([0.5], [0.5])]
         ),
     ),
     batch_size=opt.batch_size,
@@ -258,9 +327,14 @@ Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 # ----------
 #  Training
 # ----------
+if model_type == 'mnist':
+    dataloader = dataloader_mnist
+elif model_type == 'cifar10':
+    dataloader = dataloader_cifar
+
 gn = 0
 for epoch in range(opt.n_epochs):
-    for i, (imgs, _) in enumerate(dataloader_cifar):
+    for i, (imgs, _) in enumerate(dataloader):
 
         # Adversarial ground truths
         valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False)
@@ -307,10 +381,10 @@ for epoch in range(opt.n_epochs):
 
         print(
             "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
-            % (epoch, opt.n_epochs, i, len(dataloader_cifar), d_loss.item(), g_loss.item())
+            % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item())
         )
-
-        save_image(gen_imgs.data[:25], "images_batch256_exp2/%d.png" % epoch, nrow=5, normalize=True)
+        "{}_{}".format(model_arch, model_type)
+        save_image(gen_imgs.data[:25], "{}_{}/epoch_{}.png".format(model_arch, model_type, epoch), nrow=5, normalize=True)
         '''
         print ("Calculating Inception Score ...")
         score = inception_score(cuda=True, batch_size=32, resize=True, splits=10)
