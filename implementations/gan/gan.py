@@ -106,12 +106,13 @@ class Generator(nn.Module):
         self.model_type = model_type
         self.model_arch = model_arch
         self.image_shape = {'mnist': (1, 32, 32),
-                            'cifar10': (3, 64, 64)}
+                            'cifar10': (3, 64, 64),
+                            'celebA': (3, 64, 64)}
 
         if self.model_type == 'mnist':
             channels = 1
             img_size = 32
-        elif self.model_type == 'cifar10':
+        elif self.model_type == 'cifar10' or self.model_type == 'celebA':
             channels = 3
             img_size = 64
         else:
@@ -175,11 +176,41 @@ class Generator(nn.Module):
 
         })
 
+        self.models_celebA = nn.ModuleDict({
+
+            'dc_gan':       nn.Sequential(
+                            # input is Z, going into a convolution
+                            nn.ConvTranspose2d(opt.latent_dim, 64 * 8, 4, 1, 0, bias=False),
+                            nn.BatchNorm2d(64 * 8),
+                            nn.ReLU(True),
+                            # state size. (ngf*8) x 4 x 4
+                            nn.ConvTranspose2d(64 * 8, 64 * 4, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(64 * 4),
+                            nn.ReLU(True),
+                            # state size. (ngf*4) x 8 x 8
+                            nn.ConvTranspose2d(64 * 4, 64 * 2, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(64 * 2),
+                            nn.ReLU(True),
+                            # state size. (ngf*2) x 16 x 16
+                            nn.ConvTranspose2d(64 * 2, 64, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(64),
+                            nn.ReLU(True),
+                            # state size. (ngf) x 32 x 32
+                            nn.ConvTranspose2d(64, 3, 4, 2, 1, bias=False),
+                            nn.Tanh()
+                            # state size. (nc) x 64 x 64
+            )
+
+        })
+
         self.model = {'mnist': self.models_mnist,
-                      'cifar10': self.models_cifar10}
+                      'cifar10': self.models_cifar10,
+                      'celebA': self.models_celebA}
 
     def forward(self, z):
         if self.model_arch == 'dc_gan':
+            if self.model_type == 'celebA':
+                return self.model[self.model_type][self.model_arch](z)
             compress = self.l1(z)
             compress = compress.view(compress.shape[0], 128, self.init_size, self.init_size)
             z = compress
@@ -202,12 +233,13 @@ class Discriminator(nn.Module):
         self.model_type = model_type
         self.model_arch = model_arch
         self.image_shape = {'mnist': (1, 32, 32),
-                            'cifar10': (3, 64, 64)}
+                            'cifar10': (3, 64, 64),
+                            'celebA': (3, 64, 64)}
 
         if self.model_type == 'mnist':
             channels = 1
             img_size = 32
-        elif self.model_type == 'cifar10':
+        elif self.model_type == 'cifar10' or self.model_type == 'celebA':
             channels = 3
             img_size = 64
         else:
@@ -232,12 +264,11 @@ class Discriminator(nn.Module):
                             nn.Linear(256, 1),
                             nn.Sigmoid()),
 
-            'dc_gan':   nn.Sequential(
-                        *discriminator_block(channels, 16, bn=False),
-                        *discriminator_block(16, 32),
-                        *discriminator_block(32, 64),
-                        *discriminator_block(64, 128)),
-
+            'dc_gan':       nn.Sequential(
+                            *discriminator_block(channels, 16, bn=False),
+                            *discriminator_block(16, 32),
+                            *discriminator_block(32, 64),
+                            *discriminator_block(64, 128)),
         })
 
         self.models_mnist = nn.ModuleDict({
@@ -257,12 +288,40 @@ class Discriminator(nn.Module):
                             *discriminator_block(64, 128))
         })
 
+        self.models_celebA = nn.ModuleDict({
+
+            'dc_gan':       nn.Sequential(
+                            # input is (nc) x 64 x 64
+                            nn.Conv2d(3, 64, 4, 2, 1, bias=False),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            # state size. (ndf) x 32 x 32
+                            nn.Conv2d(64, 64 * 2, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(64 * 2),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            # state size. (ndf*2) x 16 x 16
+                            nn.Conv2d(64 * 2, 64 * 4, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(64 * 4),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            # state size. (ndf*4) x 8 x 8
+                            nn.Conv2d(64 * 4, 64 * 8, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(64 * 8),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            # state size. (ndf*8) x 4 x 4
+                            nn.Conv2d(64 * 8, 1, 4, 1, 0, bias=False),
+                            nn.Sigmoid()
+
+            )
+        })
+
         self.model = {'mnist': self.models_mnist,
-                      'cifar10': self.models_cifar10}
+                      'cifar10': self.models_cifar10,
+                      'celebA': self.models_celebA}
 
     def forward(self, img):
         if self.model_arch == 'dc_gan':
             out = self.model[self.model_type][self.model_arch](img)
+            if self.model_type == 'celebA':
+                return out
             out = out.view(out.shape[0], -1)
             validity = self.adv_layer(out)
         elif self.model_arch == 'vanilla_gan':
@@ -277,7 +336,7 @@ adversarial_loss = torch.nn.BCELoss()
 
 # Initialize generator and discriminator
 model_arch = 'dc_gan'
-model_type = 'cifar10'
+model_type = 'celebA'
 generator = Generator(model_arch=model_arch, model_type=model_type)
 discriminator = Discriminator(model_arch=model_arch, model_type=model_type)
 
@@ -318,6 +377,40 @@ dataloader_cifar = torch.utils.data.DataLoader(
     shuffle=True,
 )
 
+dataroot = "data/celeba"
+
+# We can use an image folder dataset the way we have it setup.
+# Create the dataset
+celebA_dataset = datasets.ImageFolder(root=dataroot, transform=transforms.Compose([
+                               transforms.Resize(64),
+                               transforms.CenterCrop(64),
+                               transforms.ToTensor(),
+                               transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]))
+dataloader_celebA = torch.utils.data.DataLoader(celebA_dataset, batch_size=128, shuffle=True, num_workers=2)
+
+import matplotlib.pyplot as plt
+import torchvision.utils as vutils
+
+device = torch.device("cuda:0" if cuda else "cpu")
+# Plot some training images
+real_batch = next(iter(dataloader_celebA))
+plt.figure(figsize=(8,8))
+plt.axis("off")
+plt.title("Training Images")
+plt.imshow(np.transpose(vutils.make_grid(real_batch[0].to(device)[:64], padding=2, normalize=True).cpu(),(1,2,0)))
+plt.show()
+
+
+# custom weights initialization called on netG and netD
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        nn.init.normal_(m.weight.data, 0.0, 0.02)
+    elif classname.find('BatchNorm') != -1:
+        nn.init.normal_(m.weight.data, 1.0, 0.02)
+        nn.init.constant_(m.bias.data, 0)
+
+
 # Optimizers
 optimizer_G = torch.optim.Adam(generator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
 optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
@@ -331,6 +424,8 @@ if model_type == 'mnist':
     dataloader = dataloader_mnist
 elif model_type == 'cifar10':
     dataloader = dataloader_cifar
+elif model_type == 'celebA':
+    dataloader = dataloader_celebA
 
 gn = 0
 for epoch in range(opt.n_epochs):
@@ -351,7 +446,8 @@ for epoch in range(opt.n_epochs):
 
         # Sample noise as generator input
         z = Variable(Tensor(np.random.normal(0, 1, (imgs.shape[0], opt.latent_dim))))
-
+        if model_type == 'celebA':
+            z = torch.randn(imgs.shape[0], opt.latent_dim, 1, 1, device=device)
         # Generate a batch of images
         gen_imgs = generator(z)
 
