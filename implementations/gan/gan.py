@@ -59,7 +59,7 @@ def inception_score(imgs, cuda=True, batch_size=32, resize=False, splits=1):
 
     # Load inception model
     inception_model = inception_v3(pretrained=True, transform_input=False).type(dtype)
-    inception_model.eval();
+    inception_model.eval()
     up = nn.Upsample(size=(299, 299), mode='bilinear').type(dtype)
     def get_pred(x):
         if resize:
@@ -336,7 +336,7 @@ adversarial_loss = torch.nn.BCELoss()
 
 # Initialize generator and discriminator
 model_arch = 'dc_gan'
-model_type = 'celebA'
+model_type = 'cifar10'
 generator = Generator(model_arch=model_arch, model_type=model_type)
 discriminator = Discriminator(model_arch=model_arch, model_type=model_type)
 
@@ -362,6 +362,18 @@ dataloader_mnist = torch.utils.data.DataLoader(
     shuffle=True,
 )
 
+
+class IgnoreLabelDataset(torch.utils.data.Dataset):
+    def __init__(self, orig):
+        self.orig = orig
+
+    def __getitem__(self, index):
+        return self.orig[index][0]
+
+    def __len__(self):
+        return len(self.orig)
+
+
 dataloader_cifar = torch.utils.data.DataLoader(
     datasets.CIFAR10(
         "../../data/cifar10",
@@ -375,6 +387,17 @@ dataloader_cifar = torch.utils.data.DataLoader(
     ),
     batch_size=opt.batch_size,
     shuffle=True,
+)
+
+cifar = datasets.CIFAR10(
+        "../../data/cifar10",
+        train=True,
+        download=True,
+        transform=transforms.Compose([
+                    transforms.Resize(64),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 )
 
 dataroot = "data/celeba"
@@ -397,8 +420,8 @@ real_batch = next(iter(dataloader_celebA))
 plt.figure(figsize=(8,8))
 plt.axis("off")
 plt.title("Training Images")
-plt.imshow(np.transpose(vutils.make_grid(real_batch[0].to(device)[:64], padding=2, normalize=True).cpu(),(1,2,0)))
-plt.show()
+plt.imshow(np.transpose(vutils.make_grid(real_batch[0].to(device)[:64], padding=2, normalize=True).cpu(), (1, 2, 0)))
+# plt.show()
 
 
 # custom weights initialization called on netG and netD
@@ -481,7 +504,8 @@ for epoch in range(opt.n_epochs):
         )
         "{}_{}".format(model_arch, model_type)
         save_image(gen_imgs.data[:25], "{}_{}/epoch_{}.png".format(model_arch, model_type, epoch), nrow=5, normalize=True)
-        '''
+
+        IgnoreLabelDataset(cifar)
         print ("Calculating Inception Score ...")
-        score = inception_score(cuda=True, batch_size=32, resize=True, splits=10)
-        '''
+        score = inception_score(IgnoreLabelDataset(cifar), cuda=True, batch_size=32, resize=True, splits=10)
+        print(score)
