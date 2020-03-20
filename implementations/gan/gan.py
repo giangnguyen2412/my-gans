@@ -21,7 +21,7 @@ writer = tensorboardX.SummaryWriter(log_dir='./logs')
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--n_epochs", type=int, default=200, help="number of epochs of training")
-parser.add_argument("--batch_size", type=int, default=64, help="size of the batches")
+parser.add_argument("--batch_size", type=int, default=256, help="size of the batches")
 parser.add_argument("--lr", type=float, default=0.0002, help="adam: learning rate")
 parser.add_argument("--b1", type=float, default=0.5, help="adam: decay of first order momentum of gradient")
 parser.add_argument("--b2", type=float, default=0.999, help="adam: decay of first order momentum of gradient")
@@ -138,17 +138,21 @@ class Generator(nn.Module):
                             nn.Tanh()),
 
             'dc_gan':       nn.Sequential(
+                            nn.ConvTranspose2d(100, 512, 4, 1, 0, bias = False),
+                            nn.BatchNorm2d(512),
+                            nn.ReLU(True),
+                            nn.ConvTranspose2d(512, 256, 4, 2, 1, bias = False),
+                            nn.BatchNorm2d(256),
+                            nn.ReLU(True),
+                            nn.ConvTranspose2d(256, 128, 4, 2, 1, bias = False),
                             nn.BatchNorm2d(128),
-                            nn.Upsample(scale_factor=2),
-                            nn.Conv2d(128, 128, 3, stride=1, padding=1),
-                            nn.BatchNorm2d(128, 0.8),
-                            nn.LeakyReLU(0.2, inplace=True),
-                            nn.Upsample(scale_factor=2),
-                            nn.Conv2d(128, 64, 3, stride=1, padding=1),
-                            nn.BatchNorm2d(64, 0.8),
-                            nn.LeakyReLU(0.2, inplace=True),
-                            nn.Conv2d(64, channels, 3, stride=1, padding=1),
-                            nn.Tanh()),
+                            nn.ReLU(True),
+                            nn.ConvTranspose2d(128, 64, 4, 2, 1, bias = False),
+                            nn.BatchNorm2d(64),
+                            nn.ReLU(True),
+                            nn.ConvTranspose2d(64, 3, 4, 2, 1, bias = False),
+                            nn.Tanh())
+
         })
 
         self.models_mnist = nn.ModuleDict({
@@ -162,16 +166,30 @@ class Generator(nn.Module):
                             nn.Tanh()),
 
             'dc_gan':       nn.Sequential(
+                            nn.Conv2d(opt.latent_dim, 128, 3, stride=1, padding=1),
                             nn.BatchNorm2d(128),
+                            nn.LeakyReLU(0.2, inplace=True),
                             nn.Upsample(scale_factor=2),
                             nn.Conv2d(128, 128, 3, stride=1, padding=1),
-                            nn.BatchNorm2d(128, 0.8),
+                            nn.BatchNorm2d(128),
                             nn.LeakyReLU(0.2, inplace=True),
                             nn.Upsample(scale_factor=2),
                             nn.Conv2d(128, 64, 3, stride=1, padding=1),
                             nn.BatchNorm2d(64, 0.8),
                             nn.LeakyReLU(0.2, inplace=True),
-                            nn.Conv2d(64, channels, 3, stride=1, padding=1),
+                            nn.Upsample(scale_factor=2),
+                            nn.Conv2d(64, 64, 3, stride=1, padding=1),
+                            nn.BatchNorm2d(64, 0.8),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Upsample(scale_factor=2),
+                            nn.Conv2d(64, 32, 3, stride=1, padding=1),
+                            nn.BatchNorm2d(32, 0.8),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Upsample(scale_factor=2),
+                            nn.Conv2d(32, 16, 3, stride=1, padding=1),
+                            nn.BatchNorm2d(16, 0.8),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Conv2d(16, channels, 3, stride=1, padding=1),
                             nn.Tanh())
 
         })
@@ -208,15 +226,11 @@ class Generator(nn.Module):
                       'celebA': self.models_celebA}
 
     def forward(self, z):
-        if self.model_arch == 'dc_gan':
-            if self.model_type == 'celebA':
-                return self.model[self.model_type][self.model_arch](z)
-            compress = self.l1(z)
-            compress = compress.view(compress.shape[0], 128, self.init_size, self.init_size)
-            z = compress
-
-        out = self.model[self.model_type][self.model_arch](z)
-        img = out.view(out.size(0), *self.image_shape[self.model_type])
+        if self.model_arch == 'vanilla_gan':
+            z = z.view(z.size(0), -1)
+        img = self.model[self.model_type][self.model_arch](z)
+        if self.model_arch == 'vanilla_gan':
+            img = img.view(img.size(0), *self.image_shape[self.model_type])
         return img
 
 
@@ -265,10 +279,19 @@ class Discriminator(nn.Module):
                             nn.Sigmoid()),
 
             'dc_gan':       nn.Sequential(
-                            *discriminator_block(channels, 16, bn=False),
-                            *discriminator_block(16, 32),
-                            *discriminator_block(32, 64),
-                            *discriminator_block(64, 128)),
+                            nn.Conv2d(3, 64, 4, 2, 1, bias=False),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Conv2d(64, 128, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(128),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Conv2d(128, 256, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(256),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Conv2d(256, 512, 4, 2, 1, bias=False),
+                            nn.BatchNorm2d(512),
+                            nn.LeakyReLU(0.2, inplace=True),
+                            nn.Conv2d(512, 1, 4, 1, 0, bias=False),
+                            nn.Sigmoid())
         })
 
         self.models_mnist = nn.ModuleDict({
@@ -291,6 +314,7 @@ class Discriminator(nn.Module):
         self.models_celebA = nn.ModuleDict({
 
             'dc_gan':       nn.Sequential(
+
                             # input is (nc) x 64 x 64
                             nn.Conv2d(3, 64, 4, 2, 1, bias=False),
                             nn.LeakyReLU(0.2, inplace=True),
@@ -320,10 +344,11 @@ class Discriminator(nn.Module):
     def forward(self, img):
         if self.model_arch == 'dc_gan':
             out = self.model[self.model_type][self.model_arch](img)
-            if self.model_type == 'celebA':
-                return out
-            out = out.view(out.shape[0], -1)
-            validity = self.adv_layer(out)
+            if self.model_type == 'mnist':
+                out = out.view(out.shape[0], -1)
+                return self.adv_layer(out)
+            return out
+
         elif self.model_arch == 'vanilla_gan':
             out = img.view(img.shape[0], -1)
             validity = self.model[self.model_type][self.model_arch](out)
@@ -335,7 +360,7 @@ class Discriminator(nn.Module):
 adversarial_loss = torch.nn.BCELoss()
 
 # Initialize generator and discriminator
-model_arch = 'dc_gan'
+model_arch = 'vanilla_gan'
 model_type = 'cifar10'
 generator = Generator(model_arch=model_arch, model_type=model_type)
 discriminator = Discriminator(model_arch=model_arch, model_type=model_type)
@@ -465,20 +490,19 @@ for epoch in range(opt.n_epochs):
         #  Train Generator
         # -----------------
 
-        optimizer_G.zero_grad()
+        for j in range(3):
+            optimizer_G.zero_grad()
 
-        # Sample noise as generator input
-        z = Variable(Tensor(np.random.normal(0, 1, (imgs.shape[0], opt.latent_dim))))
-        if model_type == 'celebA':
+            # Sample noise as generator input
             z = torch.randn(imgs.shape[0], opt.latent_dim, 1, 1, device=device)
-        # Generate a batch of images
-        gen_imgs = generator(z)
+            # Generate a batch of images
+            gen_imgs = generator(z)
 
-        # Loss measures generator's ability to fool the discriminator
-        g_loss = adversarial_loss(discriminator(gen_imgs), valid)
+            # Loss measures generator's ability to fool the discriminator
+            g_loss = adversarial_loss(discriminator(gen_imgs), valid)
 
-        g_loss.backward()
-        optimizer_G.step()
+            g_loss.backward()
+            optimizer_G.step()
 
         # ---------------------
         #  Train Discriminator
@@ -503,9 +527,9 @@ for epoch in range(opt.n_epochs):
             % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item())
         )
         "{}_{}".format(model_arch, model_type)
-        save_image(gen_imgs.data[:25], "{}_{}/epoch_{}.png".format(model_arch, model_type, epoch), nrow=5, normalize=True)
+        save_image(gen_imgs.data[:50], "{}_{}/epoch_{}.png".format(model_arch, model_type, epoch), nrow=10, normalize=True)
 
-        IgnoreLabelDataset(cifar)
-        print ("Calculating Inception Score ...")
-        score = inception_score(IgnoreLabelDataset(cifar), cuda=True, batch_size=32, resize=True, splits=10)
-        print(score)
+        #IgnoreLabelDataset(cifar)
+        #print ("Calculating Inception Score ...")
+        #score = inception_score(gen_imgs, cuda=True, batch_size=32, resize=True, splits=10)
+        #print(score)
